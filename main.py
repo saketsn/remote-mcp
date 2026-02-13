@@ -3,30 +3,30 @@ import os
 import aiosqlite
 import sqlite3
 import logging
-import tempfile
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MathMasterPro")
 
-# SMART PATH FIX: Works on Windows local and Horizon Cloud
-# 1. Checks for an environment variable (for production)
-# 2. Defaults to the system's native temp directory (C:\Users\... on Win, /tmp on Linux)
-TEMP_DIR = tempfile.gettempdir()
-DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(TEMP_DIR, "math_tuition_prod.db"))
+# PRODUCTION STORAGE: Using script directory for persistence on Azure Foundry.
+# This ensures data survives reboots if a persistent volume is attached.
+BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
+DB_PATH: str = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "math_tuition_prod.db"))
+
+logger.info(f" Database initialized at: {DB_PATH}")
 
 # Initialize FastMCP Server object
-mcp = FastMCP("MathMaster_Pro")
+mcp = FastMCP("MathMaster_Pro_Production")
 
 # --- Database Schema Setup ---
-def init_db():
-    """ Initializes the SQLite schema using standard synchronous sqlite3. """
+def init_db() -> None:
+    """Initializes the SQLite schema with WAL mode and foreign key constraints."""
     try:
-        # Connect to the resolved path
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys = ON")
             cursor = conn.cursor()
             
             # 1. Students Registry
@@ -65,19 +65,19 @@ def init_db():
                 )
             """)
             conn.commit()
-            logger.info(f" Database ready at: {DB_PATH}")
+            logger.info(" Database schema verified.")
     except Exception as e:
-        logger.error(f"XX DB Init Failed: {e}")
+        logger.error(f"XXX DB Init Failed: {e}")
         raise
 
 # Run initialization during module load
 init_db()
 
-# --- MCP Tools ---
+# --- MCP Tools with Strict Type Annotations ---
 
 @mcp.tool()
 async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, Any]:
-    """Registers a new student. Returns the generated student_id."""
+    """Registers a new student. Returns a status dictionary with the student_id."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -85,35 +85,40 @@ async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, An
                 (name, grade, monthly_fee)
             )
             await db.commit()
-            return {"status": "success", "student_id": cursor.lastrowid}
+            return {
+                "status": "success", 
+                "student_id": cursor.lastrowid, 
+                "message": f"Successfully onboarded {name}"
+            }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @mcp.tool()
-async def delete_student(student_id: int) -> dict:
-    """
-    Permanently deletes a student and all their associated records 
-    (scores and fees) from the database.
-    """
+async def delete_student(student_id: int) -> Dict[str, str]:
+    """Permanently deletes a student and all associated academic/financial records."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
-            # Check if student exists first
             async with db.execute("SELECT name FROM students WHERE id = ?", (student_id,)) as cursor:
                 student = await cursor.fetchone()
                 if not student:
                     return {"status": "error", "message": f"Student ID {student_id} not found."}
                 
-            # Perform deletion
             await db.execute("DELETE FROM students WHERE id = ?", (student_id,))
             await db.commit()
-            return {"status": "success", "message": f"Student {student[0]} and all records deleted."}
+            return {"status": "success", "message": f"Student {student[0]} and all associated data deleted."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @mcp.tool()
-async def record_test_score(student_id: int, topic: str, marks: float, total: float, date: Optional[str] = None) -> Dict[str, Any]:
-    """Logs test marks. Date format: YYYY-MM-DD (defaults to today)."""
-    test_date = date if date else datetime.now().strftime("%Y-%m-%d")
+async def record_test_score(
+    student_id: int, 
+    topic: str, 
+    marks: float, 
+    total: float, 
+    date: Optional[str] = None
+) -> Dict[str, str]:
+    """Logs academic test marks. Date format: YYYY-MM-DD (defaults to today)."""
+    test_date: str = date if date else datetime.now().strftime("%Y-%m-%d")
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
@@ -121,36 +126,38 @@ async def record_test_score(student_id: int, topic: str, marks: float, total: fl
                 (student_id, test_date, topic, marks, total)
             )
             await db.commit()
-            return {"status": "success", "message": f"Recorded score for {topic}."}
+            return {"status": "success", "message": f"Recorded score for {topic} on {test_date}."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @mcp.tool()
 async def get_student_report(student_id: int) -> Dict[str, Any]:
-    """Retrieves full profile, academic trends, and payment history for a student."""
+    """Retrieves a comprehensive student report including profile and academic history."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
-            # Fetch profile
             async with db.execute("SELECT * FROM students WHERE id = ?", (student_id,)) as cur:
                 profile = await cur.fetchone()
-                if not profile: return {"status": "error", "message": "Student not found"}
+                if not profile: 
+                    return {"status": "error", "message": "Student record not found."}
                 
-            # Fetch scores
-            async with db.execute("SELECT * FROM test_results WHERE student_id = ?", (student_id,)) as cur:
-                tests = [dict(row) for row in await cur.fetchall()]
+            async with db.execute("SELECT * FROM test_results WHERE student_id = ? ORDER BY test_date DESC", (student_id,)) as cur:
+                tests: List[Dict[str, Any]] = [dict(row) for row in await cur.fetchall()]
 
-            return {"profile": dict(profile), "academic_history": tests}
+            return {
+                "status": "success",
+                "profile": dict(profile), 
+                "academic_history": tests
+            }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 # --- Run Settings ---
 if __name__ == "__main__":
-    # Required settings for Foundry: sse transport and specific port
+    # Required settings for Azure Foundry / Horizon:
+    # Uses SSE transport for persistent remote connections via Port 8000
     mcp.run(
         transport="sse",
         host="0.0.0.0",
         port=8000
     )
-
-
