@@ -66,7 +66,7 @@ def init_db():
             conn.commit()
             logger.info(f" Database initialized at {DB_PATH}")
     except Exception as e:
-        logger.error(f" XX Database initialization failed: {e}")
+        logger.error(f" XXX Database initialization failed: {e}")
         raise
 
 # Run DB init on startup
