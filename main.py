@@ -1,243 +1,156 @@
-# from fastmcp import FastMCP
-# import os
-# import aiosqlite
-# import sqlite3
-# import logging
-# import tempfile
-# from datetime import datetime
-# from typing import List, Dict, Any, Optional
-
-# # --- Configuration & Logging ---
-# logging.basicConfig(level=logging.INFO)
-# logger = logging.getLogger("MathMasterPro")
-
-# # SMART PATH FIX: Works on Windows local and Horizon Cloud
-# # 1. Checks for an environment variable (for production)
-# # 2. Defaults to the system's native temp directory (C:\Users\... on Win, /tmp on Linux)
-# TEMP_DIR = tempfile.gettempdir()
-# DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(TEMP_DIR, "math_tuition_prod.db"))
-
-# # Initialize FastMCP Server object
-# mcp = FastMCP("MathMaster_Pro")
-
-# # --- Database Schema Setup ---
-# def init_db():
-#     """ Initializes the SQLite schema using standard synchronous sqlite3. """
-#     try:
-#         # Connect to the resolved path
-#         with sqlite3.connect(DB_PATH) as conn:
-#             conn.execute("PRAGMA journal_mode=WAL")
-#             cursor = conn.cursor()
-            
-#             # 1. Students Registry
-#             cursor.execute("""
-#                 CREATE TABLE IF NOT EXISTS students(
-#                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                     name TEXT NOT NULL,
-#                     grade TEXT NOT NULL,
-#                     monthly_fee REAL DEFAULT 0.0,
-#                     joined_date DATE DEFAULT CURRENT_DATE
-#                 )
-#             """)
-            
-#             # 2. Academic Progress Tracking
-#             cursor.execute("""
-#                 CREATE TABLE IF NOT EXISTS test_results(
-#                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                     student_id INTEGER,
-#                     test_date DATE NOT NULL,
-#                     topic TEXT NOT NULL,
-#                     marks_obtained REAL NOT NULL,
-#                     total_marks REAL NOT NULL,
-#                     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-#                 )
-#             """)
-            
-#             # 3. Financial Ledger
-#             cursor.execute("""
-#                 CREATE TABLE IF NOT EXISTS fee_records(
-#                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                     student_id INTEGER,
-#                     amount REAL NOT NULL,
-#                     payment_date DATE NOT NULL,
-#                     month_covered TEXT NOT NULL,
-#                     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-#                 )
-#             """)
-#             conn.commit()
-#             logger.info(f" Database ready at: {DB_PATH}")
-#     except Exception as e:
-#         logger.error(f"XX DB Init Failed: {e}")
-#         raise
-
-# # Run initialization during module load
-# init_db()
-
-# # --- MCP Tools ---
-
-# @mcp.tool()
-# async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, Any]:
-#     """Registers a new student. Returns the generated student_id."""
-#     try:
-#         async with aiosqlite.connect(DB_PATH) as db:
-#             cursor = await db.execute(
-#                 "INSERT INTO students (name, grade, monthly_fee) VALUES (?, ?, ?)",
-#                 (name, grade, monthly_fee)
-#             )
-#             await db.commit()
-#             return {"status": "success", "student_id": cursor.lastrowid}
-#     except Exception as e:
-#         return {"status": "error", "message": str(e)}
-
-# @mcp.tool()
-# async def delete_student(student_id: int) -> dict:
-#     """
-#     Permanently deletes a student and all their associated records 
-#     (scores and fees) from the database.
-#     """
-#     try:
-#         async with aiosqlite.connect(DB_PATH) as db:
-#             # Check if student exists first
-#             async with db.execute("SELECT name FROM students WHERE id = ?", (student_id,)) as cursor:
-#                 student = await cursor.fetchone()
-#                 if not student:
-#                     return {"status": "error", "message": f"Student ID {student_id} not found."}
-                
-#             # Perform deletion
-#             await db.execute("DELETE FROM students WHERE id = ?", (student_id,))
-#             await db.commit()
-#             return {"status": "success", "message": f"Student {student[0]} and all records deleted."}
-#     except Exception as e:
-#         return {"status": "error", "message": str(e)}
-
-# @mcp.tool()
-# async def record_test_score(student_id: int, topic: str, marks: float, total: float, date: Optional[str] = None) -> Dict[str, Any]:
-#     """Logs test marks. Date format: YYYY-MM-DD (defaults to today)."""
-#     test_date = date if date else datetime.now().strftime("%Y-%m-%d")
-#     try:
-#         async with aiosqlite.connect(DB_PATH) as db:
-#             await db.execute(
-#                 "INSERT INTO test_results (student_id, test_date, topic, marks_obtained, total_marks) VALUES (?, ?, ?, ?, ?)",
-#                 (student_id, test_date, topic, marks, total)
-#             )
-#             await db.commit()
-#             return {"status": "success", "message": f"Recorded score for {topic}."}
-#     except Exception as e:
-#         return {"status": "error", "message": str(e)}
-
-# @mcp.tool()
-# async def get_student_report(student_id: int) -> Dict[str, Any]:
-#     """Retrieves full profile, academic trends, and payment history for a student."""
-#     try:
-#         async with aiosqlite.connect(DB_PATH) as db:
-#             db.row_factory = aiosqlite.Row
-#             # Fetch profile
-#             async with db.execute("SELECT * FROM students WHERE id = ?", (student_id,)) as cur:
-#                 profile = await cur.fetchone()
-#                 if not profile: return {"status": "error", "message": "Student not found"}
-                
-#             # Fetch scores
-#             async with db.execute("SELECT * FROM test_results WHERE student_id = ?", (student_id,)) as cur:
-#                 tests = [dict(row) for row in await cur.fetchall()]
-
-#             return {"profile": dict(profile), "academic_history": tests}
-#     except Exception as e:
-#         return {"status": "error", "message": str(e)}
-
-# # --- Run Settings ---
-# if __name__ == "__main__":
-#     # Required settings for Foundry: sse transport and specific port
-#     mcp.run(
-#         transport="sse",
-#         host="0.0.0.0",
-#         port=8000
-#     )
-
-
-
 from fastmcp import FastMCP
 import os
 import aiosqlite
 import sqlite3
 import logging
+import tempfile
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("HimanshiTracker")
+logger = logging.getLogger("MathMasterPro")
 
-# CLOUD PERSISTENCE: Points to the app directory. 
-# Ensure your host has a persistent volume attached to BASE_DIR.
-BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
-DB_PATH: str = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "tracker_prod.db"))
+# SMART PATH FIX: Use a consistent path for the database.
+# In production cloud environments, ensure you mount a persistent volume to this path.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "math_tuition_prod.db"))
 
-mcp = FastMCP("HimanshiTracker")
+mcp = FastMCP("MathMaster_Pro")
 
 # --- Database Schema Setup ---
-def init_db() -> None:
-    """Initializes the SQLite schema with foreign key support."""
+def init_db():
+    """ Initializes the SQLite schema using standard synchronous sqlite3. """
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys = ON")
             cursor = conn.cursor()
             
+            # Students Table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tasks(
+                CREATE TABLE IF NOT EXISTS students(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_name TEXT NOT NULL,
-                    category TEXT,
-                    status TEXT DEFAULT 'Pending',
-                    created_at DATE DEFAULT CURRENT_DATE
+                    name TEXT NOT NULL,
+                    grade TEXT NOT NULL,
+                    monthly_fee REAL DEFAULT 0.0,
+                    joined_date DATE DEFAULT CURRENT_DATE
+                )
+            """)
+            
+            # Test Results Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS test_results(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id INTEGER,
+                    test_date DATE NOT NULL,
+                    topic TEXT NOT NULL,
+                    marks_obtained REAL NOT NULL,
+                    total_marks REAL NOT NULL,
+                    FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
                 )
             """)
             conn.commit()
-            logger.info(f"✅ Database ready at {DB_PATH}")
+            logger.info(f" Database initialized at: {DB_PATH}")
     except Exception as e:
-        logger.error(f"❌ DB Init Failed: {e}")
+        logger.error(f"XXX DB Init Failed: {e}")
         raise
 
+# Ensure DB is ready on startup
 init_db()
 
-# --- MCP Tools (Strictly Formatted for Foundry Schema) ---
+# --- MCP Tools (Strictly Documented for Azure Foundry Schema) ---
 
 @mcp.tool()
-async def add_task(task_name: str, category: str = "General") -> Dict[str, Any]:
+async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, Any]:
     """
-    Adds a new task to the tracker system.
+    Registers a new student into the tutoring system.
     
     Args:
-        task_name: The descriptive title of the task to be completed.
-        category: The classification for the task (e.g., 'Work', 'Personal').
+        name: The full legal name of the student.
+        grade: The current grade or class level (e.g., 'Grade 10').
+        monthly_fee: The agreed upon monthly tuition fee amount.
     """
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
-                "INSERT INTO tasks (task_name, category) VALUES (?, ?)",
-                (task_name, category)
+                "INSERT INTO students (name, grade, monthly_fee) VALUES (?, ?, ?)",
+                (name, grade, monthly_fee)
             )
             await db.commit()
-            return {"status": "success", "task_id": cursor.lastrowid}
+            return {"status": "success", "student_id": cursor.lastrowid}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @mcp.tool()
-async def list_tasks() -> List[Dict[str, Any]]:
+async def record_test_score(
+    student_id: int, 
+    topic: str, 
+    marks: float, 
+    total: float, 
+    date: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Retrieves all current tasks from the database.
+    Logs test marks for a student to track academic performance.
+    
+    Args:
+        student_id: The unique ID of the student.
+        topic: The specific subject or topic tested (e.g., 'Trigonometry').
+        marks: The score obtained by the student.
+        total: The maximum possible score.
+        date: The date of the test (YYYY-MM-DD). Defaults to today.
+    """
+    test_date = date if date else datetime.now().strftime("%Y-%m-%d")
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO test_results (student_id, test_date, topic, marks_obtained, total_marks) VALUES (?, ?, ?, ?, ?)",
+                (student_id, test_date, topic, marks, total)
+            )
+            await db.commit()
+            return {"status": "success", "message": f"Recorded score for {topic}."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@mcp.tool()
+async def delete_student(student_id: int) -> Dict[str, str]:
+    """
+    Permanently deletes a student and all their academic records.
+    
+    Args:
+        student_id: The unique integer ID of the student to delete.
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM students WHERE id = ?", (student_id,))
+            await db.commit()
+            return {"status": "success", "message": f"Student ID {student_id} deleted."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@mcp.tool()
+async def get_student_report(student_id: int) -> Dict[str, Any]:
+    """
+    Retrieves full profile and academic history for a student.
+    
+    Args:
+        student_id: The unique integer ID of the student.
     """
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM tasks ORDER BY id DESC") as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+            async with db.execute("SELECT * FROM students WHERE id = ?", (student_id,)) as cur:
+                profile = await cur.fetchone()
+                if not profile: return {"status": "error", "message": "Student not found"}
+                
+            async with db.execute("SELECT * FROM test_results WHERE student_id = ?", (student_id,)) as cur:
+                tests = [dict(row) for row in await cur.fetchall()]
+
+            return {"profile": dict(profile), "academic_history": tests}
     except Exception as e:
-        return [{"status": "error", "message": str(e)}]
+        return {"status": "error", "message": str(e)}
 
 # --- Run Settings ---
 if __name__ == "__main__":
-    # ESSENTIAL: SSE transport and Port 8000 for Foundry remote connection
+    # Required for cloud deployment (SSE transport and Port 8000)
     mcp.run(transport="sse", host="0.0.0.0", port=8000)
-
