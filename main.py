@@ -3,7 +3,7 @@ import os
 import aiosqlite
 import sqlite3
 import logging
-import json
+import tempfile
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -11,24 +11,25 @@ from typing import List, Dict, Any, Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MathMasterPro")
 
-# CLOUD DEPLOYMENT FIX: Use /tmp for writable database in cloud environments
-# Or use the environment variable if provided by your host
-DB_PATH = os.environ.get("DATABASE_PATH", "/tmp/math_tuition_prod.db")
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CATEGORIES_PATH = os.path.join(BASE_DIR, "categories.json")
+# SMART PATH FIX: Works on Windows local and Horizon Cloud
+# 1. Checks for an environment variable (for production)
+# 2. Defaults to the system's native temp directory (C:\Users\... on Win, /tmp on Linux)
+TEMP_DIR = tempfile.gettempdir()
+DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(TEMP_DIR, "math_tuition_prod.db"))
 
-# Initialize FastMCP - the name must be simple
+# Initialize FastMCP Server object
 mcp = FastMCP("MathMaster_Pro")
 
 # --- Database Schema Setup ---
 def init_db():
-    """ Initializes the SQLite schema. """
+    """ Initializes the SQLite schema using standard synchronous sqlite3. """
     try:
+        # Connect to the resolved path
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             
-            # Students Table
+            # 1. Students Registry
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS students(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +40,7 @@ def init_db():
                 )
             """)
             
-            # Test Results Table
+            # 2. Academic Progress Tracking
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS test_results(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +53,7 @@ def init_db():
                 )
             """)
             
-            # Fee Ledger Table
+            # 3. Financial Ledger
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fee_records(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,19 +65,19 @@ def init_db():
                 )
             """)
             conn.commit()
-            logger.info(f"✅ Database initialized at {DB_PATH}")
+            logger.info(f" Database ready at: {DB_PATH}")
     except Exception as e:
-        logger.error(f"❌ DB Init Failed: {e}")
+        logger.error(f"XX DB Init Failed: {e}")
         raise
 
-# Initialize DB at module level so it runs during deployment
+# Run initialization during module load
 init_db()
 
 # --- MCP Tools ---
 
 @mcp.tool()
 async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, Any]:
-    """Registers a new student. Returns the new student's ID."""
+    """Registers a new student. Returns the generated student_id."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -90,7 +91,7 @@ async def add_student(name: str, grade: str, monthly_fee: float) -> Dict[str, An
 
 @mcp.tool()
 async def record_test_score(student_id: int, topic: str, marks: float, total: float, date: Optional[str] = None) -> Dict[str, Any]:
-    """Logs test marks for a student. Date: YYYY-MM-DD."""
+    """Logs test marks. Date format: YYYY-MM-DD (defaults to today)."""
     test_date = date if date else datetime.now().strftime("%Y-%m-%d")
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -99,30 +100,32 @@ async def record_test_score(student_id: int, topic: str, marks: float, total: fl
                 (student_id, test_date, topic, marks, total)
             )
             await db.commit()
-            return {"status": "success", "message": f"Recorded {marks}/{total} for {topic}."}
+            return {"status": "success", "message": f"Recorded score for {topic}."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @mcp.tool()
 async def get_student_report(student_id: int) -> Dict[str, Any]:
-    """Comprehensive look-up for student profile, academic, and financial history."""
+    """Retrieves full profile, academic trends, and payment history for a student."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM students WHERE id = ?", (student_id,)) as cursor:
-                profile = await cursor.fetchone()
-                if not profile: return {"status": "error", "message": "ID not found"}
+            # Fetch profile
+            async with db.execute("SELECT * FROM students WHERE id = ?", (student_id,)) as cur:
+                profile = await cur.fetchone()
+                if not profile: return {"status": "error", "message": "Student not found"}
                 
-            async with db.execute("SELECT * FROM test_results WHERE student_id = ?", (student_id,)) as cursor:
-                tests = [dict(row) for row in await cursor.fetchall()]
+            # Fetch scores
+            async with db.execute("SELECT * FROM test_results WHERE student_id = ?", (student_id,)) as cur:
+                tests = [dict(row) for row in await cur.fetchall()]
 
             return {"profile": dict(profile), "academic_history": tests}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# --- Run Configuration ---
+# --- Run Settings ---
 if __name__ == "__main__":
-    # ESSENTIAL: 'sse' transport, 0.0.0.0 host, and explicit port for Foundry/Horizon
+    # Required settings for Foundry: sse transport and specific port
     mcp.run(
         transport="sse",
         host="0.0.0.0",
